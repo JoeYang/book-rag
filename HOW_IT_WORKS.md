@@ -194,6 +194,154 @@ The `response_mode` controls how retrieved chunks are fed to the LLM within each
 
 ---
 
+## Deep Dive: How ReAct Agents Work
+
+### The ReAct Loop
+
+ReAct stands for **Reason + Act**. It's a prompting pattern where the LLM alternates between thinking and taking actions:
+
+```
+User Question
+     |
+     v
++------------------------------------------+
+|  THOUGHT: "I need to find X. Let me      |  <-- LLM reasons about what to do
+|           search for it."                |
++------------------------------------------+
+     |
+     v
++------------------------------------------+
+|  ACTION: search_books("specific query")  |  <-- LLM picks a tool + input
++------------------------------------------+
+     |
+     v
++------------------------------------------+
+|  OBSERVATION: "Here's what I found..."   |  <-- Tool returns results
++------------------------------------------+
+     |
+     v
++------------------------------------------+
+|  THOUGHT: "That answered part of it,     |  <-- LLM reflects on results
+|           but I still need Y."           |
++------------------------------------------+
+     |
+     v
++------------------------------------------+
+|  ACTION: search_books("another query")   |  <-- Another tool call
++------------------------------------------+
+     |
+     v
++------------------------------------------+
+|  OBSERVATION: "More results..."          |
++------------------------------------------+
+     |
+     v
++------------------------------------------+
+|  THOUGHT: "Now I have everything I need" |  <-- LLM decides it's done
++------------------------------------------+
+     |
+     v
++------------------------------------------+
+|  ANSWER: Final synthesized response      |  <-- Output to user
++------------------------------------------+
+```
+
+The key insight: **the LLM decides** when to stop searching. It's not hardcoded -- the model genuinely reasons about whether it has enough information.
+
+### What the Framework Sends to the LLM
+
+Under the hood, LlamaIndex constructs a prompt that looks roughly like this:
+
+```
+You are designed to help with a variety of tasks.
+
+## Tools
+You have access to the following tools:
+- search_books: Search through all 7 Harry Potter books...
+- retrieve_passages: Retrieve raw text passages...
+
+## Output Format
+To use a tool, respond with:
+Thought: [your reasoning about what to do next]
+Action: [tool name]
+Action Input: {"query": "your search query"}
+
+When you receive tool results, they appear as:
+Observation: [tool output]
+
+You can repeat Thought/Action/Observation as many times as needed.
+
+When you have enough information, respond with:
+Thought: I have enough information to answer.
+Answer: [your final answer]
+```
+
+The LLM then generates a `Thought:` + `Action:` block. The framework intercepts the action, runs the tool, appends the `Observation:`, and sends everything back to the LLM. This loop continues until the LLM outputs `Answer:` instead of `Action:`.
+
+### Writing a Good ReAct System Prompt
+
+The system prompt you provide shapes **how** the agent reasons. It has five key parts:
+
+```
+[1. IDENTITY]        -- Who is the agent?
+[2. CAPABILITIES]    -- What can it do?
+[3. STRATEGY]        -- HOW should it approach complex questions?
+[4. EXAMPLES]        -- Concrete decomposition examples
+[5. OUTPUT STYLE]    -- How to format the final answer
+```
+
+#### Bad prompt (too vague):
+
+```
+You are a helpful assistant. Answer questions about Harry Potter.
+```
+
+The agent will make one search and call it done -- same as naive RAG.
+
+#### Good prompt (guides multi-step reasoning):
+
+```
+You are a Harry Potter expert with access to all seven books.
+
+STRATEGY: For complex questions, break them into multiple targeted
+searches. Don't try to answer everything in one search.
+
+EXAMPLES:
+- "Name everyone who destroyed a horcrux"
+  -> Search for each horcrux separately: diary, ring, locket,
+     cup, diadem, Nagini, Harry-as-horcrux
+
+- "How did Snape's relationship with Harry change?"
+  -> Search Snape+Harry in early books, then middle books,
+     then the reveal in Deathly Hallows
+
+- "What are all the passwords to Dumbledore's office?"
+  -> Search for passwords in each book separately
+
+IMPORTANT:
+- Make multiple searches when information is scattered
+- After each search, assess: do I have everything I need?
+- Only give your final answer when confident it's complete
+- Cite which book events come from when possible
+```
+
+#### Key principles for effective prompts:
+
+| Principle | Why |
+|-----------|-----|
+| **Give decomposition examples** | The LLM mimics your examples when breaking down similar questions |
+| **Tell it to assess after each search** | Prevents premature answers with incomplete info |
+| **Say "multiple searches" explicitly** | Without this, agents default to one-and-done |
+| **Don't over-constrain** | Let the agent decide *how many* searches -- it varies per question |
+
+The examples don't need to be exhaustive. The LLM generalizes from the patterns you show. Three good examples are usually enough.
+
+### LLM Compatibility Note
+
+The ReAct pattern requires the LLM to be good at structured output (generating `Thought:` / `Action:` blocks reliably). Large models (70B+, or API models like Claude, GPT-4) handle this well. Smaller local models (7-8B) may struggle and produce malformed tool calls. If that happens, fall back to the non-agentic query engine approach which works with any model.
+
+---
+
 ## Cost Considerations
 
 Agentic RAG uses more API calls than naive RAG because:
