@@ -1,6 +1,20 @@
+# Virtual environment
 .venv/
+
+# Python
 __pycache__/
 *.pyc
+
+# Secrets & keys
 .env
+.env.*
+*.key
+*.pem
+*.secret
+credentials.json
+secrets.yaml
+secrets.yml
+
+# Data & storage
 chroma_db/
 data/*.txt
